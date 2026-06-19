@@ -5,6 +5,19 @@ project(JucePitch VERSION 0.1.0)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Basic sanity checks to give clearer errors when required deps are missing.
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../JUCE/CMakeLists.txt")
+    message(FATAL_ERROR "Required JUCE not found at ${CMAKE_CURRENT_SOURCE_DIR}/../JUCE.\nPlease clone JUCE next to this repo (one directory up) or adjust the path in CMakeLists.txt.\nExample: git clone --depth 1 https://github.com/juce-framework/JUCE.git ../JUCE")
+endif()
+
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../vst3sdk")
+    message(FATAL_ERROR "VST3 SDK not found at ${CMAKE_CURRENT_SOURCE_DIR}/../vst3sdk.\nIf you want to build VST3, clone the Steinberg VST3 SDK next to this repo: git clone --depth 1 https://github.com/steinbergmedia/vst3sdk.git ../vst3sdk")
+endif()
+
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Source" AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/source")
+    message(WARNING "This repository contains a 'Source' directory but CMake references 'source/'.\nOn case-sensitive filesystems (Linux/CI) this will fail — consider renaming 'Source' -> 'source' or updating CMakeLists.txt to use 'Source/'.")
+endif()
+
 add_subdirectory(../JUCE ${CMAKE_BINARY_DIR}/JUCE)
 
 juce_set_vst3_sdk_path(${CMAKE_CURRENT_SOURCE_DIR}/../vst3sdk)

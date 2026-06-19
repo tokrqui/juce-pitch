@@ -53,9 +53,13 @@ private:
     float smoothedSemitones = 0.0f;
     float pitchSmoothingCoeff = 0.01f;
 
-    int overlapSamples = 480;
-    int minDelaySamples = 960;
-    int maxDelaySamples = 7200;
+    // Tunable buffer/delay sizes. Defaults were large causing ~100ms latency on
+    // typical sample rates. We cap the practical delay to keep monitoring
+    // latency low (<= 5 ms) while keeping overlap long enough for smooth
+    // crossfades.
+    int overlapSamples = 128; // small default (~2.7ms @48kHz)
+    int minDelaySamples = 256; // default (~5.3ms @48kHz)
+    int maxDelaySamples = 256; // hard cap to enforce low-latency behavior
     double crossfadeIncrement = 1.0 / 480.0;
     int headToResetOnCycle = 0;
 

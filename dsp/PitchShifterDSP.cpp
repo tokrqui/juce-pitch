@@ -26,22 +26,23 @@ namespace
 //==============================================================================
 void PitchShifterDSP::prepare (double sampleRate) noexcept
 {
-    // Overlap window ~10 ms: short enough for live monitoring latency,
-    // long enough to suppress crossfade modulation artifacts.
-    overlapSamples = std::max (64, static_cast<int> (sampleRate * 0.010));
+    // Target low-latency operation: aim for total algorithmic latency <= 5 ms.
+    // Choose a small overlap (a few ms) but not too small to avoid audible
+    // crossfade ripple. On 48kHz, 128 samples ≈ 2.67 ms, overlap*2 => ~5.3 ms.
+    const double targetLatencySec = 0.005; // 5 ms target
+    const int minOverlap = 32; // don't go below 32 samples to avoid very short windows
+    overlapSamples = std::max (minOverlap, static_cast<int> (sampleRate * 0.002)); // ~2ms base
 
-    // Minimum read lag = 2× overlap keeps both heads out of the freshly
-    // written region while the crossfade completes.
+    // Keep a small safety margin: minDelay = 2 * overlap, cap maxDelay to targetLatencySec
     minDelaySamples = overlapSamples * 2;
-    maxDelaySamples = std::min (kBufferSize / 2,
-                                std::max (minDelaySamples * 2,
-                                          static_cast<int> (sampleRate * 0.120)));
+    const int latencyCapSamples = static_cast<int> (std::ceil (sampleRate * targetLatencySec));
+    // Ensure maxDelaySamples at least minDelaySamples but no more than latencyCapSamples.
+    maxDelaySamples = std::min (std::max (minDelaySamples, latencyCapSamples), kBufferSize / 2);
 
     crossfadeIncrement = 1.0 / static_cast<double> (overlapSamples);
 
-    // ~15 ms one-pole smoothing on pitch changes — fast enough for live
-    // performance, slow enough to avoid read-rate zipper noise.
-    const auto smoothingTimeSec = 0.015;
+    // Shorter smoothing for fast response in live use while avoiding zippering.
+    const auto smoothingTimeSec = 0.005; // 5 ms smoothing time constant
     pitchSmoothingCoeff = static_cast<float> (1.0 - std::exp (-1.0 / (sampleRate * smoothingTimeSec)));
 
     reset();
@@ -52,8 +53,9 @@ void PitchShifterDSP::reset() noexcept
     buffer.fill (0.0f);
     writeIndex = 0;
 
-    readPosition[0] = static_cast<double> (maxDelaySamples);
-    readPosition[1] = static_cast<double> (maxDelaySamples - overlapSamples);
+    // Initialize read heads close behind the write head to keep latency low.
+    readPosition[0] = static_cast<double> (wrapIndex (writeIndex - minDelaySamples));
+    readPosition[1] = static_cast<double> (wrapIndex (writeIndex - (minDelaySamples + overlapSamples)));
 
     crossfadePhase = 0.0;
     headToResetOnCycle = 0;
