@@ -57,7 +57,7 @@ private:
     // ever rescheduled when ITS OWN phase wraps (i.e. its own gain is 0).
     // This makes "who is audible" and "who gets rescheduled" the same
     // variable by construction — there is no separate index to desync.
-    static constexpr int kNumGrains = 4; // 4 grains, 25% phase stagger -> smoother than 2 on big shifts
+    static constexpr int kNumGrains = 2; // 2 grains, 50% phase stagger -> standard config once grain length covers a full pitch period
 
     struct Grain
     {

@@ -32,9 +32,12 @@ void PitchShifterDSP::prepare (double sampleRate) noexcept
     sampleRateHz = sampleRate;
 
     // Grain length is the single knob controlling latency vs. quality.
-    // 3.5 ms is chosen to land under the 5 ms latency target while keeping
-    // the window long enough to avoid obvious graininess on voice.
-    constexpr double grainLengthSeconds = 0.0035;
+    // It must be longer than one voice pitch period, or the granular
+    // technique has no coherent waveform cycle to work with and produces
+    // comb-filtering / buzz instead of an audible pitch shift. Low male
+    // voices go down to ~90-100 Hz (a ~10-11 ms period), so 12 ms gives a
+    // safe margin while staying well under a ~25 ms total latency budget.
+    constexpr double grainLengthSeconds = 0.012;
     grainLengthSamples = std::max (32, static_cast<int> (std::round (sampleRate * grainLengthSeconds)));
     phaseIncrement = 1.0 / static_cast<double> (grainLengthSamples);
 
