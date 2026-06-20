@@ -1,94 +1,95 @@
 #pragma once
 
 #include <array>
-#include <cmath>
-#include <cstdint>
+#include <cstddef>
 
-//==============================================================================
-// Realtime time-domain pitch shifter for live performance.
+// =============================================================================
+// PitchShifterDSP
+// -----------------------------------------------------------------------------
+// Real-time, low-latency time-domain pitch shifter for voice.
+// No pitch detection, no FFT — granular delay-line approach.
 //
-// Algorithm: dual read heads on a circular delay line with equal-power
-// crossfading and fractional (Hermite) interpolation. No FFT or spectral
-// processing is used anywhere in this class.
+// Public contract (drop-in compatible with the previous implementation):
+//   prepare(sampleRate)        — call once before use / on sample rate change
+//   reset()                    — clear state, call on transport stop / bypass
+//   setTargetSemitones(float)  — set desired shift, range [-12, +12]
+//   processSample(float) -> float — process one sample, returns shifted sample
 //
-// Each input sample is written once; two read pointers traverse the buffer at
-// a rate proportional to the pitch ratio. When a pointer approaches the write
-// head, it is repositioned to a safe lag while the other pointer carries the
-// output through a crossfade, eliminating discontinuity clicks.
-//==============================================================================
+// Latency: bounded by (2 * grain length), target <= 5ms total.
+// =============================================================================
 class PitchShifterDSP
 {
 public:
+    PitchShifterDSP() = default;
+
+    // Exposed constants used by the host-facing code (APVTS ranges, UI, etc.)
+    // Make these public so other translation units (e.g. PluginProcessor.cpp)
+    // can reference them when creating parameter ranges.
     static constexpr float kMinSemitones = -12.0f;
     static constexpr float kMaxSemitones =  12.0f;
-    static constexpr float kSemitoneStep   =   0.5f;
+    // UI step / granularity for the pitch parameter (in semitones).
+    static constexpr float kSemitoneStep = 0.1f;
 
-    PitchShifterDSP() noexcept = default;
-
-    // Called on the message thread or during prepareToPlay — never allocates.
     void prepare (double sampleRate) noexcept;
-
-    // Clears buffer state; safe to call when transport stops.
     void reset() noexcept;
 
-    // Sets the target pitch in semitones. Smoothing happens inside processSample().
     void setTargetSemitones (float semitones) noexcept;
 
-    // Processes one sample and returns the pitch-shifted result.
-    [[nodiscard]] float processSample (float inputSample) noexcept;
+    float processSample (float inputSample) noexcept;
+
+    // Optional but useful for host PDC (plugin delay compensation) reporting.
+    int getLatencySamples() const noexcept { return grainLengthSamples; }
 
 private:
-    static constexpr int   kBufferSize  = 16384;
-    static constexpr int   kBufferMask  = kBufferSize - 1;
+
+    // Circular write buffer. Sized generously relative to expected grain
+    // length range so read pointers always have safe room to roam.
+    static constexpr int kBufferSize = 8192;
     static constexpr double kBufferSizeD = static_cast<double> (kBufferSize);
 
-    // Delay line — fixed storage, allocated once with the object.
-    std::array<float, static_cast<size_t> (kBufferSize)> buffer {};
+    std::array<float, kBufferSize> buffer {};
+    int writeIndex = 0;
 
-    int   writeIndex = 0;
-    double readPosition[2] { 0.0, 0.0 };
-    double headPhase[2] { 0.0, 0.5 };
+    // --- Grain engine -------------------------------------------------------
+    // N overlapping grains (heads). Each has its own read position (in the
+    // circular buffer, fractional) and its own lifetime phase in [0, 1).
+    // A grain's gain is a pure function of ITS OWN phase, and a grain is only
+    // ever rescheduled when ITS OWN phase wraps (i.e. its own gain is 0).
+    // This makes "who is audible" and "who gets rescheduled" the same
+    // variable by construction — there is no separate index to desync.
+    static constexpr int kNumGrains = 4; // 4 grains, 25% phase stagger -> smoother than 2 on big shifts
 
-    float targetSemitones  = 0.0f;
-    float smoothedSemitones = 0.0f;
-    float pitchSmoothingCoeff = 0.01f;
-
-    // Tunable buffer/delay sizes. Defaults were large causing ~100ms latency on
-    // typical sample rates. We cap the practical delay to keep monitoring
-    // latency low (<= 5 ms) while keeping overlap long enough for smooth
-    // crossfades.
-    int overlapSamples = 128; // small default (~2.7ms @48kHz)
-    // Adaptive overlap settings
-    int minOverlapSamples = 32;
-    int maxOverlapSamples = 1024;
-    int overlapPerSemitone = 24; // samples added per semitone of shift
-    int minDelaySamples = 256; // default (~5.3ms @48kHz)
-    int maxDelaySamples = 256; // hard cap to enforce low-latency behavior
-    double crossfadeIncrement = 1.0 / 480.0;
-
-    // Prevent repeated forced repositions: after a reposition occur, wait this
-    // many samples before allowing another safety-driven reposition.
-    int repositionCooldownSamples = 0;
-    int lastRepositionWriteIndex = -kBufferSize;
-
-    void updateOverlap() noexcept;
-
-    // Hermite interpolation — four-point, low CPU, good enough for live pitch.
-    [[nodiscard]] float readInterpolated (double position) const noexcept;
-
-    [[nodiscard]] int wrapIndex (int index) const noexcept
+    struct Grain
     {
-        return index & kBufferMask;
+        double readPos = 0.0;   // fractional position in circular buffer
+        double phase   = 0.0;   // 0..1 lifetime position
+        bool   primed  = false; // false until first scheduled (avoids garbage at start)
+    };
+
+    std::array<Grain, kNumGrains> grains {};
+
+    int grainLengthSamples = 0;     // length of one grain, in samples
+    double phaseIncrement  = 0.0;   // 1.0 / grainLengthSamples
+
+    // --- Pitch smoothing ------------------------------------------------------
+    float targetSemitones   = 0.0f;
+    float smoothedSemitones = 0.0f;
+    float pitchSmoothingCoeff = 0.0f;
+
+    double sampleRateHz = 44100.0;
+
+    // --- Helpers ---------------------------------------------------------------
+    void   scheduleGrain (int grainIndex) noexcept;
+    float  grainWindow (double phase) const noexcept;
+    float  readInterpolated (double position) const noexcept;
+    void   wrapPosition (double& position) const noexcept;
+    float  currentPitchRatio() const noexcept;
+
+    static int wrapIndex (int index) noexcept
+    {
+        index %= kBufferSize;
+        if (index < 0)
+            index += kBufferSize;
+        return index;
     }
-
-    void wrapReadPosition (double& position) const noexcept;
-
-    // Circular distance from read position to write index (in samples behind write).
-    [[nodiscard]] double lagBehindWrite (double readPos) const noexcept;
-
-    void repositionHead (int headIndex) noexcept;
-
-    [[nodiscard]] float currentPitchRatio() const noexcept;
-
-    void updateSmoothedPitch() noexcept;
 };
