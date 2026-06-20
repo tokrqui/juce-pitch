@@ -47,7 +47,7 @@ private:
 
     int   writeIndex = 0;
     double readPosition[2] { 0.0, 0.0 };
-    double crossfadePhase = 0.0;
+    double headPhase[2] { 0.0, 0.5 };
 
     float targetSemitones  = 0.0f;
     float smoothedSemitones = 0.0f;
@@ -58,10 +58,20 @@ private:
     // latency low (<= 5 ms) while keeping overlap long enough for smooth
     // crossfades.
     int overlapSamples = 128; // small default (~2.7ms @48kHz)
+    // Adaptive overlap settings
+    int minOverlapSamples = 32;
+    int maxOverlapSamples = 1024;
+    int overlapPerSemitone = 24; // samples added per semitone of shift
     int minDelaySamples = 256; // default (~5.3ms @48kHz)
     int maxDelaySamples = 256; // hard cap to enforce low-latency behavior
     double crossfadeIncrement = 1.0 / 480.0;
-    int headToResetOnCycle = 0;
+
+    // Prevent repeated forced repositions: after a reposition occur, wait this
+    // many samples before allowing another safety-driven reposition.
+    int repositionCooldownSamples = 0;
+    int lastRepositionWriteIndex = -kBufferSize;
+
+    void updateOverlap() noexcept;
 
     // Hermite interpolation — four-point, low CPU, good enough for live pitch.
     [[nodiscard]] float readInterpolated (double position) const noexcept;
